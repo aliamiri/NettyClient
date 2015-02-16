@@ -1,4 +1,4 @@
-package io.netty.example.time;
+package com.asan.client;
 
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -8,10 +8,9 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.Properties;
 
-public class TimeClient {
-//    public static String server = "192.168.10.38";
-//    public static int port = 8080;
-    final static Logger logger = Logger.getLogger(TimeClient.class);
+public class Client {
+
+    final static Logger logger = Logger.getLogger(Client.class);
 
 
     public static void main(String[] args) throws Exception {

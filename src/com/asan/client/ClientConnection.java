@@ -1,4 +1,4 @@
-package io.netty.example.time;
+package com.asan.client;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
