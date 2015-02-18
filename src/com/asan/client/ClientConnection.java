@@ -5,31 +5,63 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.ScheduledFuture;
 import org.apache.log4j.Logger;
 
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.Date;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 
+@ChannelHandler.Sharable
 public class ClientConnection extends ChannelInboundHandlerAdapter {
 
-    SocketChannel socketChannel;
+    volatile SocketChannel socketChannel;
     int clientId;
-    Channel channel;
     String serverAddr;
     int serverPort;
+    ScheduledFuture<?> scheduledFuture = null;
+
+    public static int receivedPackets = 0;
+    public static int sentPackets = 0;
+    public static int totalMessagesSend = 0;
+
+    private int trySendCount = 1000;
+    private int tryConnectCount = 10;
+    private EventLoopGroup group;
+    byte[] msg;
+    int sleepTime = 0;
+
+    public static int totalSends = 0;
+
+    private ByteBuf buf;
+
 
     final static Logger logger = Logger.getLogger(ClientConnection.class);
 
-    public void connect(EventLoopGroup loopGroup, String server, int port, int id)  {
+    public void init(EventLoopGroup loopGroup, String server, int port, int id, int sleepTime) {
+        group = loopGroup;
         clientId = id;
         serverAddr = server;
         serverPort = port;
+        Random random = new Random();
+        tryConnectCount = random.nextInt(5);
+        this.sleepTime = sleepTime;
+        connect();
+    }
+
+    public void connect() {
+        Random random = new Random();
+        trySendCount = random.nextInt(10);
+
+        totalSends += trySendCount;
+
         Bootstrap b = new Bootstrap();
-        b.group(loopGroup);
+        b.group(group);
 
         b.channel(NioSocketChannel.class);
         b.option(ChannelOption.SO_KEEPALIVE, true);
-
 
         b.handler(new ChannelInitializer<SocketChannel>() {
             @Override
@@ -38,91 +70,165 @@ public class ClientConnection extends ChannelInboundHandlerAdapter {
             }
         });
 
-        try {
-            ChannelFuture f = b.connect(server, port).addListener(new ChannelFutureListener() {
-                @Override
-                public void operationComplete(ChannelFuture future) throws Exception {
-                    if (future.isSuccess()) {
-                        logger.info("operationComplete : future result is successful");
-                        socketChannel = (SocketChannel) future.channel();
-                    } else {
-                        logger.error("operationComplete : future result is not successful");
-                    }
+        b.connect(serverAddr, serverPort).addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture future) throws Exception {
+                if (future.isSuccess()) {
+                    logger.info("operationComplete : future result is successful");
+                    socketChannel = (SocketChannel) future.channel();
+                    send();
+                } else {
+                    logger.error("operationComplete : future result is not successful");
                 }
-            });
-        }
-        catch (Exception e){
-            logger.error("connect for id " + clientId,e);
-        }
+            }
+        });
     }
 
     public void send() {
         if (socketChannel != null && socketChannel.isActive()) {
-            byte[] msg = generateMessage();
-            ByteBuf buf = socketChannel.alloc().buffer(msg.length);
-            buf.writeBytes(msg);
+            logger.info(new Date());
+            byte[] sendMsg = generateMessage();
+            ByteBuf buf = socketChannel.alloc().buffer(sendMsg.length);
+            buf.writeBytes(sendMsg);
             socketChannel.writeAndFlush(buf);
+            totalMessagesSend++;
         }
     }
 
     private byte[] generateMessage() {
+
         Random random = new Random();
-        int rand = random.nextInt(100) + 900;
-        byte[] msg = new byte[rand];
+        int rand = random.nextInt(900);
+        int doGetResp = random.nextInt(10) + 2; //todo remove this +2
+
+        byte sendResponse = 0;
+
+        if (doGetResp > 1) {
+            sentPackets++;
+            sendResponse = 1;
+        }
+
+        msg = new byte[rand];
         new Random().nextBytes(msg);
 
-        byte[] first60 = DecToBCDArray(60, 1);
-        byte[] dest = "SO".getBytes();
-        byte[] source = DecToBCDArray(clientId, 2);
+        byte[] dest = new byte[2];
+        dest[0] = (byte) 396;
+        dest[1] = (byte) 124;
+        byte[] source = new byte[2];
+        Arrays.fill(source, (byte) 0);
 
-        int length = msg.length + 2;
+        ByteBuffer index = ByteBuffer.allocate(4);
+        index.putInt(clientId);
+
+        byte[] clientIndex = index.array();
+
+        int length = msg.length + 10;
         byte[] len = DecToBCDArray(length, 2);
 
-        byte[] completeMsg = new byte[length];
+        byte[] completeMsg = new byte[length + 2];
 
         for (int i = 0; i < completeMsg.length; ++i) {
-            completeMsg[i] = i < 2 ? len[i] : (i < 3 ? first60[0] : (i < 5 ? dest[i - 3] : (i < 7 ? source[i - 5] : msg[i - 7])));
+            completeMsg[i] = i < 2 ? len[i] : (i < 3 ? 60 : (i < 5 ? dest[i - 3] : (i < 7 ? source[i - 5] : (i < 11 ? clientIndex[i - 7] : (i < 12 ? sendResponse : msg[i - 12])))));
         }
         return completeMsg;
     }
 
+    int currentLen = 0;
+
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        ByteBuf in = (ByteBuf) msg;
-        StringBuilder stringBuilder = new StringBuilder();
+    public void channelRead(ChannelHandlerContext ctx, Object inputMsg) throws Exception {
 
-        byte[] len = new byte[2];
-        try {
-            len[0] = in.readByte();
-            len[1] = in.readByte();
-            int length = Integer.parseInt(BCDtoString(len));
-            byte[] message = new byte[length - 7];
-            in.readByte();
+        if (buf == null) {
+            buf = ctx.alloc().buffer(10000);
+        }
+        ByteBuf m = (ByteBuf) inputMsg;
+        buf.writeBytes(m);
+        m.release();
 
-
-            byte[] source = new byte[2];
-
-            source[0] = in.readByte();
-            source[1] = in.readByte();
-
-            in.readByte();
-            in.readByte();
-
-            int messageID = Integer.parseInt(BCDtoString(source));
-
-            if (clientId != messageID) {
-                logger.error("ClientId "+clientId+"is not equal messageId" + messageID);
+        while (true) {
+            if (currentLen == 0 && buf.readableBytes() > 1) {
+                byte[] b = new byte[2];
+                b[0] = buf.readByte();
+                b[1] = buf.readByte();
+                currentLen = Integer.parseInt(BCDtoString(b));
             }
-            else
-                logger.info("ClientId " + clientId + "is equal messageId" + messageID);
+            if (buf.readableBytes() >= currentLen && currentLen > 0) {
+                Random random = new Random();
+                try {
+                    buf.readByte();
+                    buf.readByte();
+                    buf.readByte();
+                    buf.readByte();
+                    buf.readByte();
 
-        } catch (Exception ex) {
-            logger.error("channelRead ",ex);
-        } finally {
-            ReferenceCountUtil.release(msg); // (2)
+                    byte[] bytes = new byte[4];
+
+                    bytes[0] = buf.readByte();
+                    bytes[1] = buf.readByte();
+                    bytes[2] = buf.readByte();
+                    bytes[3] = buf.readByte();
+
+                    int messageID = bytes[0] << 24 | (bytes[1] & 0xFF) << 16 | (bytes[2] & 0xFF) << 8 | (bytes[3] & 0xFF);
+
+                    buf.readByte(); //this is for send response byte
+
+                    byte[] inputMessage = new byte[currentLen - 10];
+
+                    int i = 0;
+                    while (i < inputMessage.length) {
+                        inputMessage[i] = buf.readByte();
+                        i++;
+                    }
+                    receivedPackets++;
+                    if (!Arrays.equals(msg, inputMessage)) {
+                        logger.error("input is not equal output" + msg[0] + " , " + inputMessage[0]);
+                    }
+
+                    if (clientId != messageID)
+                        logger.error("ClientId " + clientId + "is not equal messageId" + messageID);
+                    else
+                        logger.info("ClientId " + clientId + "is equal messageId" + messageID);
+
+                    int waitForSend = random.nextInt(sleepTime) + 100;
+
+                    if (trySendCount > 0) {
+                        scheduledFuture = ctx.executor().schedule(runSend, waitForSend, TimeUnit.MILLISECONDS);
+                    }
+                    trySendCount--;
+
+                } catch (Exception ex) {
+                    logger.error("channelRead ", ex);
+                } finally {
+
+                    if (tryConnectCount > 0 && trySendCount == 0) {
+                        int waitForConnect = random.nextInt(sleepTime) + 100;
+                        int close = random.nextInt(10);
+
+                        if (close < 7)
+                            ctx.close();
+
+                        scheduledFuture = ctx.executor().schedule(runConnect, waitForConnect, TimeUnit.MILLISECONDS);
+
+                        tryConnectCount--;
+                    }
+                }
+                currentLen = 0;
+            }
+            if ((buf.readableBytes() < currentLen) || (currentLen == 0 && buf.readableBytes() < 1))
+                break;
         }
     }
 
+    Runnable runConnect = new Runnable() {
+        public void run() {
+            connect();
+        }
+    };
+    Runnable runSend = new Runnable() {
+        public void run() {
+            send();
+        }
+    };
 
     public static byte[] DecToBCDArray(long num, int byteLen) {
         int digits = 0;
@@ -185,5 +291,4 @@ public class ClientConnection extends ChannelInboundHandlerAdapter {
 
         return sb.toString();
     }
-
 }

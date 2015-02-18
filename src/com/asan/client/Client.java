@@ -11,7 +11,7 @@ import java.util.Properties;
 public class Client {
 
     final static Logger logger = Logger.getLogger(Client.class);
-
+    final static int one_second = 1000;
 
     public static void main(String[] args) throws Exception {
 
@@ -24,22 +24,25 @@ public class Client {
         int port = Integer.parseInt(prop.getProperty("port"));
         int threadCount = Integer.parseInt(prop.getProperty("threadCount"));
         int connectionCount = Integer.parseInt(prop.getProperty("connectionCount"));
+        int clientSleepTime = Integer.parseInt(prop.getProperty("clientSleepTime"));
+        int sleepTime = Integer.parseInt(prop.getProperty("sleepTime"));
 
         logger.info("program starts");
 
         EventLoopGroup workerGroup = new NioEventLoopGroup(threadCount);
 
         ClientConnection[] connections = new ClientConnection[connectionCount];
-        for(int i=0; i< connectionCount; i++) {
+        for (int i = 0; i < connectionCount; i++) {
             connections[i] = new ClientConnection();
-            connections[i].connect(workerGroup, server,port,i);
+            connections[i].init(workerGroup, server, port, i, clientSleepTime);
         }
 
-        for(int i = 0 ; i<connectionCount; i++)
-            connections[i].send();
-
-        Thread.sleep(10000);
+        Thread.sleep(sleepTime * one_second);
         workerGroup.shutdownGracefully();
 
+        logger.info("received packets :" + ClientConnection.receivedPackets);
+        logger.info("send packets :" + ClientConnection.sentPackets);
+
+        logger.info("total packets :" + ClientConnection.totalMessagesSend);
     }
 }
