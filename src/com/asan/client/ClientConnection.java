@@ -10,7 +10,6 @@ import org.apache.log4j.Logger;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
@@ -27,8 +26,8 @@ public class ClientConnection extends ChannelInboundHandlerAdapter {
     public static int sentPackets = 0;
     public static int totalMessagesSend = 0;
 
-    private int trySendCount = 1000;
-    private int tryConnectCount = 10;
+    private int trySendCount = 10;
+    private int tryConnectCount = 2;
     private EventLoopGroup group;
     byte[] msg;
     int sleepTime = 0;
@@ -53,7 +52,7 @@ public class ClientConnection extends ChannelInboundHandlerAdapter {
 
     public void connect() {
         Random random = new Random();
-        trySendCount = random.nextInt(10);
+        //trySendCount = random.nextInt(10);
 
         totalSends += trySendCount;
 
@@ -74,7 +73,7 @@ public class ClientConnection extends ChannelInboundHandlerAdapter {
             @Override
             public void operationComplete(ChannelFuture future) throws Exception {
                 if (future.isSuccess()) {
-                    logger.info("operationComplete : future result is successful");
+                    logger.info("operationComplete : future result is successful" + clientId);
                     socketChannel = (SocketChannel) future.channel();
                     send();
                 } else {
@@ -86,7 +85,6 @@ public class ClientConnection extends ChannelInboundHandlerAdapter {
 
     public void send() {
         if (socketChannel != null && socketChannel.isActive()) {
-            logger.info(new Date());
             byte[] sendMsg = generateMessage();
             ByteBuf buf = socketChannel.alloc().buffer(sendMsg.length);
             buf.writeBytes(sendMsg);
@@ -186,8 +184,6 @@ public class ClientConnection extends ChannelInboundHandlerAdapter {
 
                     if (clientId != messageID)
                         logger.error("ClientId " + clientId + "is not equal messageId" + messageID);
-                    else
-                        logger.info("ClientId " + clientId + "is equal messageId" + messageID);
 
                     int waitForSend = random.nextInt(sleepTime) + 100;
 
@@ -208,7 +204,8 @@ public class ClientConnection extends ChannelInboundHandlerAdapter {
                             ctx.close();
 
                         scheduledFuture = ctx.executor().schedule(runConnect, waitForConnect, TimeUnit.MILLISECONDS);
-
+//                        trySendCount = random.nextInt(10);
+                        trySendCount = 10;
                         tryConnectCount--;
                     }
                 }
